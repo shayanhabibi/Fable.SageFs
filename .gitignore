@@ -9,6 +9,8 @@ vendor/
 
 # Generated SageFs session project (regenerate with `dotnet fsi setup.fsx`)
 /session/
+# Generated hackable-mode projects (regenerate with `dotnet fsi setup.fsx --hackable`)
+/hackable/
 
 # Fable / JS artifacts
 fable_modules/

@@ -1,20 +1,23 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!--
     Standalone self-check: runs the Playground (templates/session/Playground.fs, the file setup.fsx
-    copies into session/) against vendor/ in a plain process.
-    Run from the repo root: "dotnet fsi setup.fsx" with the check flag, or "dotnet run" on this project.
+    copies into session/ and hackable/) in a plain process.
+      default mode : against vendor/ (NuGet Fable, renamed FCS fork)
+      -p:FableSageFsMode=hackable : against the unoptimized Fable built from source in hackable/
+    setup.fsx runs it; see its usage.
   -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
-    <FableSageFsProps>$(MSBuildThisFileDirectory)../../vendor/Fable.SageFs.props</FableSageFsProps>
+    <FableSageFsProps Condition="'$(FableSageFsMode)' == 'hackable'">$(MSBuildThisFileDirectory)../../hackable/Fable.SageFs.Hackable.props</FableSageFsProps>
+    <FableSageFsProps Condition="'$(FableSageFsMode)' != 'hackable'">$(MSBuildThisFileDirectory)../../vendor/Fable.SageFs.props</FableSageFsProps>
   </PropertyGroup>
   <Import Project="$(FableSageFsProps)" Condition="Exists('$(FableSageFsProps)')" />
   <ItemGroup>
     <Compile Include="../../templates/session/Playground.fs" Link="Playground.fs" />
     <Compile Include="Smoke.fs" />
   </ItemGroup>
-  <Target Name="FableSageFsRequireVendor" BeforeTargets="CollectPackageReferences;ResolveAssemblyReferences" Condition="!Exists('$(FableSageFsProps)')">
-    <Error Text="vendor/Fable.SageFs.props not found. Run 'dotnet fsi setup.fsx' from the repository root first." />
+  <Target Name="FableSageFsRequireSetup" BeforeTargets="CollectPackageReferences;ResolveAssemblyReferences" Condition="!Exists('$(FableSageFsProps)')">
+    <Error Text="$(FableSageFsProps) not found. Run 'dotnet fsi setup.fsx' (or with --hackable) from the repository root first." />
   </Target>
 </Project>

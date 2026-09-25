@@ -60,6 +60,44 @@ let fcsReport () =
               yield "loaded: " + describe a ]
     |> String.concat "\n"
 
+/// One of Fable's own assemblies as loaded in this process.
+type FableAssembly =
+    { Name: string
+      /// True for an unoptimized (Debug, Optimize=false) build: the hackable build. NuGet's is optimized.
+      Unoptimized: bool
+      /// Full name of the FCS it references, as resolved in this process ("-" when it has none).
+      Fcs: string
+      Location: string }
+
+/// Fable.AST, Fable.Transforms, Fable.Transforms.Babel and Fable.Compiler: build flavour and FCS binding.
+let fableAssemblies () =
+    let compiler = typeof<CrackerResponse>.Assembly
+    let referenced (name: string) =
+        compiler.GetReferencedAssemblies()
+        |> Array.tryFind (fun r -> r.Name = name)
+        |> Option.map Reflection.Assembly.Load
+        |> Option.defaultWith (fun () -> failwith $"Fable.Compiler does not reference {name}")
+    [ typeof<Fable.AST.Fable.Expr>.Assembly
+      referenced "Fable.Transforms"
+      referenced "Fable.Transforms.Babel"
+      compiler ]
+    |> List.map (fun a ->
+        let unoptimized =
+            a.GetCustomAttributes(typeof<Diagnostics.DebuggableAttribute>, false)
+            |> Array.exists (fun d -> (d :?> Diagnostics.DebuggableAttribute).IsJITOptimizerDisabled)
+        let fcs =
+            a.GetReferencedAssemblies()
+            |> Array.tryFind (fun r -> r.Name.EndsWith "FSharp.Compiler.Service")
+            |> Option.map (fun r -> Reflection.Assembly.Load(r).FullName)
+            |> Option.defaultValue "-"
+        { Name = a.GetName().Name; Unoptimized = unoptimized; Fcs = fcs; Location = a.Location })
+
+/// fableAssemblies () as text, one line per assembly.
+let fableReport () =
+    fableAssemblies ()
+    |> List.map (fun a -> $"""{a.Name} | {(if a.Unoptimized then "unoptimized" else "optimized")} | FCS: {a.Fcs} | {a.Location}""")
+    |> String.concat "\n"
+
 // ---------------------------------------------------------------- compiling
 
 let private cliArgsFor (projFile: string) =
@@ -191,6 +229,13 @@ let selfCheck () =
     [ check "FCS identity" (fun () ->
           let actual, expected = fcsIdentity (), expectedFcsIdentity ()
           actual = expected, $"InteractiveChecker bound to '{actual}' (expected '{expected}')")
+      check "Fable assemblies bound to the renamed fork" (fun () ->
+          let expected = expectedFcsIdentity ()
+          let wrong = fableAssemblies () |> List.filter (fun a -> a.Fcs <> "-" && a.Fcs <> expected)
+          let flavour = fableAssemblies () |> List.map (fun a -> $"""{a.Name}={(if a.Unoptimized then "unoptimized" else "optimized")}""")
+          wrong.IsEmpty,
+          (if wrong.IsEmpty then "all reference " + expected else "wrong FCS: " + (wrong |> List.map (fun a -> $"{a.Name} -> {a.Fcs}") |> String.concat ", "))
+          + " (" + String.concat ", " flavour + ")")
       check "Hello -> golden JS (cold)" (fun () -> helloVsGolden "cold")
       check "Hello -> golden JS (warm)" (fun () -> helloVsGolden "warm") ]
 

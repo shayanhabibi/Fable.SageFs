@@ -2,14 +2,18 @@
 //
 //   dotnet fsi setup.fsx             default mode: Fable.Compiler (NuGet, pinned in versions.json)
 //                                    -> renamed FCS fork in vendor/ -> session/ project -> self-check
-//   dotnet fsi setup.fsx --check     self-check only (needs a previous setup run)
-//   dotnet fsi setup.fsx --hackable  Debug Fable.Transforms from source as a session project (not implemented yet)
+//   dotnet fsi setup.fsx --hackable  default mode, then Fable built from source (unoptimized, fsc of SDK
+//                                    versions.json 'debugSdk') as SageFs session projects in hackable/
+//                                    -> self-check -> SageFs hot-patch test (tests/hotpatch)
+//   dotnet fsi setup.fsx --check [--hackable]   self-checks only (needs a previous setup run)
+//   --no-hotpatch                    with --hackable: skip the SageFs hot-patch test
 //
 // Idempotent: reruns reuse downloads and rewrite nothing that is already up to date.
 // Everything it produces is gitignored: vendor/, session/, .work/, bin/, obj/.
 
 #load "tools/Common.fsx"
 #load "tools/Rename.fsx"
+#load "tools/Hackable.fsx"
 
 open System
 open System.IO
@@ -47,22 +51,11 @@ let checkSageFs () =
     | Some v -> warn $"sagefs {v} is installed; this repo was tested with {versions.TestedSageFs}. It will probably work; report problems with both versions."
     | None -> warn $"SageFs is not installed as a global tool. Install it with: dotnet tool install --global sagefs --version {versions.TestedSageFs}"
 
-/// The hackable build compiles Fable with the debug SDK through a nested global.json under .work/
-/// (fsc from SDK 10.0.4xx emits invalid Debug IL for Fable). Default mode only reports whether it is available.
-let checkDebugSdk (required: bool) =
-    step $"Debug SDK {versions.DebugSdk} (for --hackable)"
-    let dir = workDir </> "debug-sdk"
-    let json = $"{{\n  \"sdk\": {{\n    \"version\": \"{versions.DebugSdk}\",\n    \"rollForward\": \"disable\"\n  }}\n}}\n"
-    writeTextIfChanged (dir </> "global.json") json |> ignore
-    let r = dotnet dir [ "--version" ] false
-    if r.ExitCode = 0 && r.Output.Trim() = versions.DebugSdk then
-        ok $"""nested {rel (dir </> "global.json")} selects dotnet {r.Output.Trim()}"""
-    else
-        let hint =
-            $"Install .NET SDK {versions.DebugSdk}: https://dotnet.microsoft.com/download/dotnet/10.0 "
-            + $"(or: dotnet-install.sh --version {versions.DebugSdk} / dotnet-install.ps1 -Version {versions.DebugSdk})."
-        if required then fail $"SDK {versions.DebugSdk} is not installed." hint
-        else warn $"SDK {versions.DebugSdk} is not installed; only needed for --hackable. {hint}"
+/// --hackable compiles Fable with the fsc of SDK versions.json 'debugSdk' (fsc from SDK 10.0.4xx emits
+/// invalid Debug IL for Fable). Default mode only reports whether that SDK is available.
+let checkDebugSdk () =
+    try Hackable.debugFsc versions.DebugSdk |> ignore
+    with SetupFailure(message, hint) -> warn $"{message} Only needed for --hackable. {hint}"
 
 // ---------------------------------------------------------------- default mode
 
@@ -81,7 +74,7 @@ let fetchFable () =
     let ast = ensurePackage "Fable.AST" astVersion </> "lib" </> "netstandard2.0" </> "Fable.AST.dll"
     for (id, v) in deps do
         info $"dependency {id} {v}"
-    lib, ast, deps
+    pkg, lib, ast, deps
 
 let renameIntoVendor (lib: string) (ast: string) =
     step "Rename FCS fork into vendor/"
@@ -165,52 +158,92 @@ let generateSession () =
 
 // ---------------------------------------------------------------- self-check
 
-let selfCheck () =
-    step "Self-check (tests/smoke: FCS identity + Hello -> golden JS)"
-    if not (File.Exists propsFile) then
-        fail "vendor/ is not set up." "Run 'dotnet fsi setup.fsx' first."
-    let build = dotnet repoRoot [ "build"; smokeProject; "--nologo"; "-v:q"; "-clp:ErrorsOnly" ] false
+type Mode = Default | HackableMode
+
+let selfCheck (mode: Mode) =
+    let props, modeArgs, runArgs, label =
+        match mode with
+        | Default -> propsFile, [], [], "default: NuGet Fable in vendor/"
+        | HackableMode -> Hackable.hackableProps, [ "-p:FableSageFsMode=hackable" ], [ "--"; "--expect-unoptimized" ], "hackable: unoptimized Fable from .work/fable"
+    step $"Self-check, {label} (tests/smoke: FCS binding + Hello -> golden JS)"
+    if not (File.Exists props) then
+        fail $"{rel props} does not exist." (if mode = Default then "Run 'dotnet fsi setup.fsx' first." else "Run 'dotnet fsi setup.fsx --hackable' first.")
+    let build = dotnet repoRoot ([ "build"; smokeProject; "--nologo"; "-v:q"; "-clp:ErrorsOnly" ] @ modeArgs) false
     if build.ExitCode <> 0 then
         info (build.Output.Trim())
         fail "tests/smoke does not build." "See the errors above."
-    let r = dotnet repoRoot [ "run"; "--no-build"; "--project"; smokeProject ] true
+    let r = dotnet repoRoot ([ "run"; "--no-build"; "--project"; smokeProject ] @ modeArgs @ runArgs) true
     if r.ExitCode <> 0 then
         fail "Self-check failed." "See the FAIL lines above. Deleting vendor/ and .work/ and rerunning setup.fsx rebuilds everything."
     ok "self-check passed"
 
+/// The end-to-end SageFs hot-patch test (tests/hotpatch/HotPatch.fsx) in a child 'dotnet fsi'.
+let hotPatchTest () =
+    step "Hot-patch test through SageFs (tests/hotpatch)"
+    let r = dotnet repoRoot [ "fsi"; repoRoot </> "tests" </> "hotpatch" </> "HotPatch.fsx" ] true
+    match r.ExitCode with
+    | 0 -> ok "hot-patch test passed"
+    | 3 -> warn "hot-patch test skipped (see above); run it later with: dotnet fsi tests/hotpatch/HotPatch.fsx"
+    | _ -> fail "Hot-patch test failed." "See the output above and docs/hackable.md."
+
 // ---------------------------------------------------------------- main
 
 let usage () =
-    printfn "usage: dotnet fsi setup.fsx [--check | --hackable | --help]"
+    printfn "usage: dotnet fsi setup.fsx [--hackable [--no-hotpatch]] | --check [--hackable] | --help"
+
+let defaultMode () =
+    info $"Fable.SageFs setup in {repoRoot}"
+    info $"pinned: Fable.Compiler {versions.FableCompiler}, FCS fork {versions.FcsFork}, FSharp.Core {versions.FSharpCore}, SageFs {versions.TestedSageFs}, debug SDK {versions.DebugSdk}"
+    checkSdk ()
+    checkSageFs ()
+    let pkg, lib, ast, deps = fetchFable ()
+    let dlls = renameIntoVendor lib ast
+    writeProps dlls deps
+    generateSession ()
+    selfCheck Default
+    pkg, deps
+
+let hackableMode (hotpatch: bool) =
+    let pkg, deps = defaultMode ()
+    let fsc = Hackable.debugFsc versions.DebugSdk
+    let sha, url = Hackable.sourceCommit pkg
+    Hackable.ensureClone sha url
+    let template = File.ReadAllText(repoRoot </> "templates" </> "session" </> "Playground.fs")
+    Hackable.generate versions fsc deps template
+    Hackable.build ()
+    selfCheck HackableMode
+    if hotpatch then hotPatchTest ()
 
 let main (args: string list) =
-    match args with
-    | [ "--help" ] | [ "-h" ] -> usage (); 0
-    | [ "--check" ] ->
+    let has (flag: string) = List.contains flag args
+    let known = set [ "--help"; "-h"; "--check"; "--hackable"; "--no-hotpatch" ]
+    match args |> List.filter (known.Contains >> not) with
+    | [] -> ()
+    | other ->
+        usage ()
+        fail $"""Unknown arguments: {String.concat " " other}""" "See usage above."
+    if has "--help" || has "-h" then
+        usage ()
+    elif has "--check" then
         checkSdk ()
-        selfCheck ()
-        0
-    | [ "--hackable" ] ->
-        fail "--hackable is not implemented yet." "Use the default mode for now: dotnet fsi setup.fsx"
-    | [] ->
-        info $"Fable.SageFs setup in {repoRoot}"
-        info $"pinned: Fable.Compiler {versions.FableCompiler}, FCS fork {versions.FcsFork}, FSharp.Core {versions.FSharpCore}, SageFs {versions.TestedSageFs}"
-        checkSdk ()
-        checkSageFs ()
-        checkDebugSdk false
-        let lib, ast, deps = fetchFable ()
-        let dlls = renameIntoVendor lib ast
-        writeProps dlls deps
-        generateSession ()
-        selfCheck ()
+        selfCheck Default
+        if has "--hackable" then
+            selfCheck HackableMode
+            if not (has "--no-hotpatch") then hotPatchTest ()
+    elif has "--hackable" then
+        hackableMode (not (has "--no-hotpatch"))
+        step "Done"
+        info $"Open a SageFs session on {rel Hackable.hackableProject} (working directory {rel Hackable.hackableDir})."
+        info "Edit Fable in .work/fable/src (or redefine functions with send_fsharp_code, nested modules instead of"
+        info "'namespace'), then evaluate  Playground.compileHello ();;  -- see docs/hackable.md."
+    else
+        checkDebugSdk ()
+        defaultMode () |> ignore
         step "Done"
         info $"Open a SageFs session on {rel sessionProject} (working directory {rel sessionDir}) and evaluate:"
         info "    Playground.fcsIdentity ();;"
         info "    Playground.compileHello ();;"
-        0
-    | other ->
-        usage ()
-        fail $"""Unknown arguments: {String.concat " " other}""" "See usage above."
+    0
 
 let exitCode =
     try

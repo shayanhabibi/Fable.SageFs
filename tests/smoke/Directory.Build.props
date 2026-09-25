@@ -1,0 +1,9 @@
+<Project>
+  <!-- Separate bin/obj per mode (default / hackable), so switching modes never mixes assemblies.
+       Set here because restore needs BaseIntermediateOutputPath before the SDK props run. -->
+  <PropertyGroup>
+    <FableSageFsMode Condition="'$(FableSageFsMode)' == ''">default</FableSageFsMode>
+    <BaseIntermediateOutputPath>obj/$(FableSageFsMode)/</BaseIntermediateOutputPath>
+    <BaseOutputPath>bin/$(FableSageFsMode)/</BaseOutputPath>
+  </PropertyGroup>
+</Project>
