@@ -237,8 +237,8 @@ let main (args: string list) =
         info "Edit Fable in .work/fable/src (or redefine functions with send_fsharp_code, nested modules instead of"
         info "'namespace'), then evaluate  Playground.compileHello ();;  -- see docs/hackable.md."
     else
-        checkDebugSdk ()
         defaultMode () |> ignore
+        checkDebugSdk () // optional: only reports whether --hackable could run
         step "Done"
         info $"Open a SageFs session on {rel sessionProject} (working directory {rel sessionDir}) and evaluate:"
         info "    Playground.fcsIdentity ();;"

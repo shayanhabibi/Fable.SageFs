@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: "1"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+
+jobs:
+  # SageFs is not installed here, so setup.fsx only warns about it. What runs:
+  #   - setup.fsx: download Fable.Compiler, rename the FCS fork into vendor/, build session/,
+  #     then tests/smoke (FCS identity + Hello -> golden JS in a plain process);
+  #   - tests/fsi/FsiHost.fsx: the same checks inside dotnet fsi, where the SDK FCS is already
+  #     loaded. That is the collision SageFs runs into.
+  default:
+    name: default mode (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+          global-json-file: global.json
+
+      - name: No binaries tracked
+        shell: bash
+        run: |
+          if git ls-files | grep -Ei '\.(dll|exe|pdb|nupkg)$'; then
+            echo "Binaries are tracked in git (see above)." >&2
+            exit 1
+          fi
+
+      - name: Setup (default mode)
+        run: dotnet fsi setup.fsx
+
+      - name: Setup again (idempotent)
+        run: dotnet fsi setup.fsx
+
+      - name: Self-check inside dotnet fsi (SDK FCS + renamed fork in one process)
+        run: dotnet fsi tests/fsi/FsiHost.fsx
+
+  # Build only: Fable from source, unoptimized, with the fsc of SDK 10.0.112 (versions.json 'debugSdk'),
+  # plus the hackable self-check in a plain process. The SageFs hot-patch test is skipped
+  # (--no-hotpatch) because it needs a running SageFs daemon.
+  hackable:
+    name: hackable build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Allow long paths (Fable's source tree)
+        if: runner.os == 'Windows'
+        run: git config --global core.longpaths true
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            10.0.x
+            10.0.112
+          global-json-file: global.json
+
+      - name: Setup (hackable mode, no SageFs hot-patch test)
+        run: dotnet fsi setup.fsx --hackable --no-hotpatch

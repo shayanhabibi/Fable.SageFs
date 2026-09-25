@@ -93,6 +93,8 @@ let ensureClone (sha: string) (url: string) =
             let init = git fableDir [ "init"; "-q" ]
             if init.ExitCode <> 0 then fail $"git init in {rel fableDir} failed:\n{init.Output}" "Delete .work/fable and rerun."
             git fableDir [ "remote"; "add"; "origin"; url ] |> ignore
+        // Some Fable test paths exceed Windows' 260-character limit; without this the checkout drops them.
+        git fableDir [ "config"; "core.longpaths"; "true" ] |> ignore
         info $"fetching {url} {sha} (shallow)"
         let fetch = git fableDir [ "fetch"; "-q"; "--depth"; "1"; "origin"; sha ]
         if fetch.ExitCode <> 0 then
