@@ -1,0 +1,7 @@
+{
+  "fableCompiler": "5.16.2",
+  "fcsFork": "43.11.200",
+  "fsharpCore": "10.1.401",
+  "testedSageFs": "0.6.830",
+  "debugSdk": "10.0.112"
+}

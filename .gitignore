@@ -1,0 +1,30 @@
+# Build output (every project, including tests/smoke and samples)
+bin/
+obj/
+*.binlog
+
+# Produced on YOUR machine by `dotnet fsi setup.fsx` - never commit binaries
+vendor/
+.work/
+
+# Generated SageFs session project (regenerate with `dotnet fsi setup.fsx`)
+/session/
+
+# Fable / JS artifacts
+fable_modules/
+node_modules/
+*.js.map
+
+# Diagnostics and dumps
+*.gcdump
+*.nettrace
+*.dmp
+*.log
+
+# SageFs per-project local state
+.SageFs/
+
+# IDE
+.idea/
+.vs/
+*.user

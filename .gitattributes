@@ -1,0 +1,6 @@
+* text=auto
+*.js text eol=lf
+*.fs text eol=lf
+*.fsx text eol=lf
+*.fsproj text eol=lf
+*.json text eol=lf
