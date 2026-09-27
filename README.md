@@ -71,11 +71,20 @@ Other commands:
 
 ```sh
 dotnet fsi setup.fsx --check          # self-check only (after a setup run)
+dotnet fsi setup.fsx --vendor-only    # vendor/ and its props only, for a project with its own session
 dotnet fsi tests/fsi/FsiHost.fsx      # the same self-check inside plain dotnet fsi (SDK FCS already loaded)
 dotnet fsi setup.fsx --help
 ```
 
 Reruns are idempotent: files that are already up to date are not rewritten.
+
+## Using it from your own project
+
+To run Fable in your own session project, for example while developing a Fable compiler plugin, import
+`vendor/Fable.SageFs.props` and run `setup.fsx --vendor-only`. [docs/compiler-plugins.md](docs/compiler-plugins.md)
+covers pinning this repository, matching `dotnet fable` output byte for byte, reloading a plugin without
+restarting the session, and what SageFs hot reload cannot reach. Problems with SageFs met while building such a
+session are listed in [docs/sagefs-issues.md](docs/sagefs-issues.md).
 
 ## Hackable mode
 
@@ -140,7 +149,10 @@ Everything that setup produces goes into gitignored folders: `vendor/`, `session
   (43.11.200), `FSharp.Core`, the tested SageFs version and the SDK used for Debug builds. Changing
   `fableCompiler` may work for other 5.x releases that ship the fork. After changing it, update `fcsFork`,
   regenerate `samples/Hello/Hello.expected.js` if the JS changes, and update the package versions in
-  `tests/fsi/FsiHost.fsx`. Only 5.16.2 has been tested.
+  `tests/fsi/FsiHost.fsx`. Only 5.16.2 has been tested end to end. `templates/session/Playground.fs` uses API
+  that older releases lack, so with another version setup warns, skips the sample session and the self-check,
+  and still writes `vendor/`. `vendor/` has been used with 5.13.0, see
+  [docs/compiler-plugins.md](docs/compiler-plugins.md).
 - **The SDK is pinned.** `global.json` requires SDK 10.0.4xx. Hackable mode needs SDK 10.0.112, because fsc
   from 10.0.4xx emits invalid Debug IL for Fable.
 - **Tested by hand only on Windows 11.** The scripts use only `System.IO` paths and no shell commands. CI covers
@@ -155,6 +167,7 @@ Everything that setup produces goes into gitignored folders: `vendor/`, `session
 | `sagefs X is installed; this repo was tested with 0.6.830` | This is a warning. Things will probably work. If they don't, report both versions. |
 | `FAIL FCS identity: ... bound to 'FSharp.Compiler.Service, Version=43.12...'` | Fable got the SDK's FCS. Rerun `dotnet fsi setup.fsx`. In a session, make sure it was opened on `session/` (or `hackable/`) and that you did not `#r` Fable DLLs by hand. |
 | `FAIL Hello -> golden JS` | Your Fable output differs from the golden file. If you changed `fableCompiler` in `versions.json`, regenerate the golden file. Otherwise, delete `vendor/` and `.work/` and rerun setup. |
+| `WARN session/Fable.SageFs.Session.fsproj does not build against Fable.Compiler X` | `fableCompiler` is not 5.16.2, and the sample uses newer Fable API. `vendor/` is still usable. Use `--vendor-only` to skip the sample. |
 | `session/Fable.SageFs.Session.fsproj does not build` | You probably edited `session/Playground.fs`. Delete it and rerun setup to restore the template. |
 | Download failed | Check your connection to nuget.org, or restore the package into your NuGet cache and rerun. |
 | Hackable: `git checkout ... failed`, or missing files in `.work/fable` on Windows | Long paths. Setup sets `core.longpaths` for new clones. For an older clone, delete `.work/fable` and rerun. |
@@ -166,7 +179,7 @@ Everything that setup produces goes into gitignored folders: `vendor/`, `session
 ## Repository layout
 
 ```text
-setup.fsx                 entry point (default, --hackable, --check)
+setup.fsx                 entry point (default, --hackable, --vendor-only, --check)
 versions.json             pinned versions: Fable.Compiler, FCS fork, FSharp.Core, tested SageFs, debug SDK
 global.json               SDK 10.0.4xx
 tools/Rename.fsx          Cecil rename + retarget (also usable standalone)
@@ -177,7 +190,7 @@ samples/Hello/            sample project + golden JS
 tests/smoke/              self-check in a plain process (used by setup)
 tests/fsi/FsiHost.fsx     self-check inside dotnet fsi, next to the SDK FCS
 tests/hotpatch/           end-to-end SageFs hot-patch test (hackable mode)
-docs/                     hackable mode docs and status
+docs/                     hackable mode docs and status, using it from your own project, SageFs issues
 ```
 
 ## Credits

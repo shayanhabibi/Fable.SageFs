@@ -7,6 +7,8 @@
 //                                    -> self-check -> SageFs hot-patch test (tests/hotpatch)
 //   dotnet fsi setup.fsx --check [--hackable]   self-checks only (needs a previous setup run)
 //   --no-hotpatch                    with --hackable: skip the SageFs hot-patch test
+//   dotnet fsi setup.fsx --vendor-only   stop after vendor/ (for projects that import vendor/Fable.SageFs.props
+//                                    into their own session; see docs/compiler-plugins.md)
 //
 // Idempotent: reruns reuse downloads and rewrite nothing that is already up to date.
 // Everything it produces is gitignored: vendor/, session/, .work/, bin/, obj/.
@@ -27,6 +29,11 @@ let propsFile = vendorDir </> "Fable.SageFs.props"
 let sessionProject = sessionDir </> "Fable.SageFs.Session.fsproj"
 let smokeProject = repoRoot </> "tests" </> "smoke" </> "Smoke.fsproj"
 let tfm = "net10.0"
+
+/// The Fable.Compiler version that templates/session/Playground.fs and the golden JS were written against.
+/// Playground.fs uses API that older 5.x releases lack (CompileResult.Logs, CodeServices.getFSharpDiagnostics),
+/// so with another version the sample session may not build even though vendor/ is fine.
+let testedFableCompiler = "5.16.2"
 
 // ---------------------------------------------------------------- preflight
 
@@ -151,10 +158,18 @@ let generateSession () =
         warn $"{rel playground} differs from templates/session/Playground.fs; keeping your edits (delete it to regenerate)."
     step "Build session project"
     let r = dotnet repoRoot [ "build"; sessionProject; "--nologo"; "-v:q"; "-clp:ErrorsOnly" ] false
-    if r.ExitCode <> 0 then
+    if r.ExitCode = 0 then
+        ok $"{rel sessionProject} builds"
+        true
+    elif versions.FableCompiler <> testedFableCompiler then
+        // The sample targets the tested Fable API. vendor/ does not depend on it, so it is still usable.
+        info (r.Output.Trim())
+        warn $"{rel sessionProject} does not build against Fable.Compiler {versions.FableCompiler}; Playground.fs targets {testedFableCompiler}."
+        warn $"{rel propsFile} is ready. Skipping the sample session and the self-check (see docs/compiler-plugins.md)."
+        false
+    else
         info (r.Output.Trim())
         fail $"{rel sessionProject} does not build." "See the errors above. If you edited session/Playground.fs, delete it and rerun to restore the template."
-    ok $"{rel sessionProject} builds"
 
 // ---------------------------------------------------------------- self-check
 
@@ -189,22 +204,33 @@ let hotPatchTest () =
 // ---------------------------------------------------------------- main
 
 let usage () =
-    printfn "usage: dotnet fsi setup.fsx [--hackable [--no-hotpatch]] | --check [--hackable] | --help"
+    printfn "usage: dotnet fsi setup.fsx [--hackable [--no-hotpatch]] | --vendor-only | --check [--hackable] | --help"
 
-let defaultMode () =
+/// Download, rename and props: everything a project that brings its own session needs.
+let vendorOnly () =
     info $"Fable.SageFs setup in {repoRoot}"
     info $"pinned: Fable.Compiler {versions.FableCompiler}, FCS fork {versions.FcsFork}, FSharp.Core {versions.FSharpCore}, SageFs {versions.TestedSageFs}, debug SDK {versions.DebugSdk}"
+    if versions.FableCompiler <> testedFableCompiler then
+        warn $"Fable.Compiler {versions.FableCompiler} is not the tested version ({testedFableCompiler})."
     checkSdk ()
     checkSageFs ()
     let pkg, lib, ast, deps = fetchFable ()
     let dlls = renameIntoVendor lib ast
     writeProps dlls deps
-    generateSession ()
-    selfCheck Default
     pkg, deps
 
+/// Returns whether the sample session built and the self-check ran.
+let defaultMode () =
+    let pkg, deps = vendorOnly ()
+    let built = generateSession ()
+    if built then selfCheck Default
+    pkg, deps, built
+
 let hackableMode (hotpatch: bool) =
-    let pkg, deps = defaultMode ()
+    let pkg, deps, built = defaultMode ()
+    if not built then
+        fail $"--hackable needs the sample session, which does not build against Fable.Compiler {versions.FableCompiler}."
+             $"Hackable mode is only tested with {testedFableCompiler}. Set versions.json 'fableCompiler' to it."
     let fsc = Hackable.debugFsc versions.DebugSdk
     let sha, url = Hackable.sourceCommit pkg
     Hackable.ensureClone sha url
@@ -216,7 +242,7 @@ let hackableMode (hotpatch: bool) =
 
 let main (args: string list) =
     let has (flag: string) = List.contains flag args
-    let known = set [ "--help"; "-h"; "--check"; "--hackable"; "--no-hotpatch" ]
+    let known = set [ "--help"; "-h"; "--check"; "--hackable"; "--no-hotpatch"; "--vendor-only" ]
     match args |> List.filter (known.Contains >> not) with
     | [] -> ()
     | other ->
@@ -230,6 +256,11 @@ let main (args: string list) =
         if has "--hackable" then
             selfCheck HackableMode
             if not (has "--no-hotpatch") then hotPatchTest ()
+    elif has "--vendor-only" then
+        if has "--hackable" then fail "--vendor-only and --hackable cannot be combined." "Pick one."
+        vendorOnly () |> ignore
+        step "Done"
+        info $"Import {rel propsFile} into your session project; see docs/compiler-plugins.md."
     elif has "--hackable" then
         hackableMode (not (has "--no-hotpatch"))
         step "Done"
@@ -237,12 +268,15 @@ let main (args: string list) =
         info "Edit Fable in .work/fable/src (or redefine functions with send_fsharp_code, nested modules instead of"
         info "'namespace'), then evaluate  Playground.compileHello ();;  -- see docs/hackable.md."
     else
-        defaultMode () |> ignore
+        let _, _, built = defaultMode ()
         checkDebugSdk () // optional: only reports whether --hackable could run
         step "Done"
-        info $"Open a SageFs session on {rel sessionProject} (working directory {rel sessionDir}) and evaluate:"
-        info "    Playground.fcsIdentity ();;"
-        info "    Playground.compileHello ();;"
+        if built then
+            info $"Open a SageFs session on {rel sessionProject} (working directory {rel sessionDir}) and evaluate:"
+            info "    Playground.fcsIdentity ();;"
+            info "    Playground.compileHello ();;"
+        else
+            info $"Import {rel propsFile} into your session project; see docs/compiler-plugins.md."
     0
 
 let exitCode =
